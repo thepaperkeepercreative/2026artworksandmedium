@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Heart of Void — Fisheye Labyrinth</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:#10050d;color:#e7d3c4}
+  body{display:flex;flex-direction:column;align-items:center;padding:18px;font-family:Georgia,serif}
+  h1{font-weight:400;font-style:italic;letter-spacing:.04em;font-size:20px;margin:0 0 12px}
+  canvas{display:block;max-width:min(96vw,1100px);height:auto!important;box-shadow:0 18px 60px #000b}
+  p{font-size:12px;opacity:.65;margin:10px 0 0;text-align:center}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+</head>
+<body>
+<h1>heart of void</h1>
+<script>
+/*
+  THE HEART OF VOID — FISHEYE LABYRINT.
+*/
+const W=900,H=700,SEED=41;
+const PAL={
+  crimson:['#650719','#8c0b25','#b20f32','#d21d3b','#ed3545'],
+  blood:['#320611','#570817','#790b20','#a50e29'],
+  maroon:['#27091f','#410d30','#5c143d','#781b4b'],
+  indigo:['#111536','#1d245e','#2d3185','#4144a4'],
+  blue:['#182d8b','#2445bd','#3764d2','#5480e5'],
+  cerulean:['#087da8','#129ec5','#42c4df','#8ce0e9'],
+  teal:['#064b50','#08716e','#14958b','#54b9a4'],
+  magenta:['#76165d','#a52180','#cf3d9c','#e46ab4'],
+  gold:['#80501a','#b47a24','#d6a53d','#f0ca65','#ffe49a'],
+  wood:['#160d17','#261326','#3d2040','#573057','#76517a','#a27b9d'],
+  ash:['#211b27','#48404a','#777078','#b6a7a3']
+};
+let src, finalImg;
+
+function setup(){
+  createCanvas(W,H); pixelDensity(1); noLoop();
+  randomSeed(SEED); noiseSeed(SEED);
+  src=createGraphics(W,H); src.pixelDensity(1);
+  paintGround(src);
+  paintOuterLabyrinth(src);
+  paintAnatomicalWeb(src);
+  paintSeatedFigure(src);
+  paintHeartAndConnections(src);
+  paintPigmentFinish(src);
+  finalImg=fisheye(src);
+  image(finalImg,0,0);
+}
+
+function paintGround(g){
+  g.background('#290611');
+  // A dark wine underpainting, crossed with directional loaded-brush strokes.
+  for(let pass=0;pass<6;pass++){
+    let n=[4200,3200,2500,1800,1100,650][pass];
+    for(let i=0;i<n;i++){
+      let x=random(W),y=random(H),a=random(-.25,.25)+.42;
+      let len=random(15,100)*(1-pass*.1),wid=random(2,12)*(1-pass*.1);
+      let c=random([...PAL.crimson,...PAL.blood,...PAL.maroon]);
+      g.stroke(c);g.strokeWeight(wid);g.strokeCap(ROUND);
+      g.line(x,y,x+cos(a)*len,y+sin(a)*len);
+      for(let k=0;k<3;k++){
+        g.stroke(random(['#e94b43','#400817','#f06b53']));g.strokeWeight(random(.4,1.3));
+        g.line(x+random(-wid/3,wid/3),y,x+cos(a)*len,y+sin(a)*len);
+      }
+    }
+  }
+  // Deep radial shadow around the perimeter.
+  g.noStroke();
+  for(let i=0;i<36;i++){
+    let t=i/36;
+    g.fill(9,2,13,5);
+    g.ellipse(W/2,H/2, W*(.45+t*.9),H*(.45+t*.9));
+  }
+  // Fine canvas crosshatch.
+  for(let i=0;i<22000;i++){
+    let x=random(W),y=random(H);
+    g.stroke(random()<.5?'#f18b6b':'#12040d');g.strokeWeight(random(.25,.85));
+    g.line(x,y,x+random(1,5),y+random(-1,2));
+  }
+}
+
+function poly(g,pts,palette,count,width,angle=0){
+  let xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  let minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  // dark underpainting and pigment mass
+  g.noStroke();g.fill(8,3,13,125);g.beginShape();pts.forEach(p=>g.vertex(p[0]+5,p[1]+8));g.endShape(CLOSE);
+  for(let i=0;i<count;i++){
+    let x=random(minX,maxX),y=random(minY,maxY);
+    if(!inside(x,y,pts))continue;
+    let a=angle+random(-.8,.8),l=random(5,28),w=random(1.2,width),c=random(palette);
+    g.stroke(c);g.strokeWeight(w);g.strokeCap(ROUND);
+    g.line(x,y,x+cos(a)*l,y+sin(a)*l);
+    for(let b=0;b<3;b++){
+      g.stroke(random(palette));g.strokeWeight(random(.35,1.1));
+      let o=random(-w*.25,w*.25);
+      g.line(x+o,y+o,x+cos(a)*l+o,y+sin(a)*l+o);
+    }
+  }
+  // Ragged, multi-pass edge.
+  path(g,pts.concat([pts[0]]),palette,width*.8,5);
+}
+function inside(x,y,p){
+  let c=false;
+  for(let i=0,j=p.length-1;i<p.length;j=i++){
+    let a=p[i],b=p[j];
+    if(((a[1]>y)!=(b[1]>y))&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])c=!c;
+  }return c;
+}
+function path(g,pts,palette,w,passes=4){
+  for(let p=0;p<passes;p++){
+    g.noFill();g.stroke(random(palette));g.strokeWeight(Math.max(.8,w*(1-p*.13)));
+    g.strokeCap(ROUND);g.strokeJoin(ROUND);g.beginShape();
+    pts.forEach(q=>g.curveVertex(q[0]+random(-2,2),q[1]+random(-2,2)));
+    g.endShape();
+  }
+  // small impasto glints along selected edges
+  for(let i=0;i<pts.length-1;i+=2){
+    let a=pts[i],b=pts[i+1];
+    g.stroke(random(palette));g.strokeWeight(random(.6,2));
+    g.line(a[0]-1,a[1]-2,b[0]-1,b[1]-2);
+  }
+}
+function strand(g,pts,palette,w,branches=true){
+  // Thick, irregular vessel with a shadow, coloured core and raised highlight.
+  path(g,pts,['#090711','#100a19'],w+10,3);
+  path(g,pts,palette,w,5);
+  let hi=pts.map(p=>[p[0]-2,p[1]-3]);
+  path(g,hi,random([PAL.gold,PAL.magenta,PAL.crimson,PAL.teal]),Math.max(1,w*.19),2);
+  if(branches){
+    for(let i=1;i<pts.length-1;i+=3){
+      if(random()<.48){
+        let p=pts[i],q=pts[Math.min(i+1,pts.length-1)];
+        let a=Math.atan2(q[1]-p[1],q[0]-p[0])+random([-1,1])*random(.65,1.25);
+        let L=random(18,65);
+        path(g,[p,[p[0]+cos(a)*L*.5,p[1]+sin(a)*L*.5],[p[0]+cos(a)*L,p[1]+sin(a)*L]],palette,random(3,8),3);
+      }
+    }
+  }
+}
+function paintOuterLabyrinth(g){
+  // Curving perimeter channels make the viewer feel enclosed inside a chamber.
+  for(let k=0;k<17;k++){
+    let y=30+k*38;
+    let pts=[];
+    for(let x=-40;x<=940;x+=45)pts.push([x,y+sin(x*.012+k*.7)*random(12,34)]);
+    strand(g,pts,random([PAL.blood,PAL.maroon,PAL.indigo,PAL.magenta]),random(3,10),false);
+  }
+  for(let k=0;k<12;k++){
+    let x=30+k*76,pts=[];
+    for(let y=-20;y<=730;y+=42)pts.push([x+sin(y*.015+k)*random(10,28),y]);
+    strand(g,pts,random([PAL.maroon,PAL.indigo,PAL.crimson]),random(3,8),false);
+  }
+  // Radial, fisheye-like arcs and concentric broken rings.
+  for(let r=130;r<520;r+=54){
+    let pts=[];
+    for(let a=-2.8;a<2.9;a+=.12)pts.push([450+cos(a)*r*1.12,350+sin(a)*r*.72]);
+    strand(g,pts,random([PAL.indigo,PAL.maroon,PAL.gold]),random(2,6),false);
+  }
+}
+function paintAnatomicalWeb(g){
+  // Interconnected arteries, veins, ligaments and hanging tissue.
+  let routes=[
+    [[70,210],[140,245],[190,220],[248,252],[300,228],[365,255],[430,230],[510,255],[570,220],[650,248],[760,215],[850,255]],
+    [[80,430],[150,390],[205,420],[265,382],[320,410],[390,370],[450,405],[520,370],[585,410],[660,380],[745,420],[840,390]],
+    [[190,40],[230,100],[280,135],[300,205],[350,250],[390,300],[420,370]],
+    [[720,30],[680,100],[700,160],[660,220],[680,290],[640,350],[650,430],[610,510]],
+    [[120,600],[190,550],[250,520],[310,480],[370,450],[420,420]],
+    [[810,610],[760,560],[720,520],[680,480],[630,455],[590,420]]
+  ];
+  routes.forEach((p,i)=>strand(g,p,random([PAL.crimson,PAL.maroon,PAL.indigo,PAL.teal,PAL.magenta]),random(7,15),true));
+  // Broken vessel ends: dark openings, torn lips, dangling threads.
+  for(let i=0;i<28;i++){
+    let x=random(80,830),y=random(90,620),a=random(TWO_PI),L=random(18,62);
+    path(g,[[x,y],[x+cos(a)*L*.5,y+sin(a)*L*.5],[x+cos(a)*L,y+sin(a)*L]],random([PAL.blood,PAL.magenta,PAL.teal]),random(2,7),3);
+    g.noStroke();g.fill('#090611');g.ellipse(x,y,random(5,12),random(4,9));
+    g.noFill();g.stroke(random([ '#d52b48','#ed5a63','#d9a64b']));g.strokeWeight(2);g.arc(x,y,14,10,a,a+PI);
+  }
+  // Fine sinew threads hanging vertically from the upper labyrinth.
+  for(let i=0;i<32;i++){
+    let x=random(90,820),y=random(20,180),L=random(65,250);
+    path(g,[[x,y],[x+random(-20,20),y+L*.4],[x+random(-30,30),y+L]],random([PAL.maroon,PAL.crimson,PAL.gold,PAL.teal]),random(1,3),2);
+  }
+}
+function paintSeatedFigure(g){
+  // Ground shadow and lotus-like seated silhouette.
+  g.noStroke();g.fill('#08050e');g.ellipse(690,495,310,105);
+  poly(g,[[550,430],[590,380],[645,365],[700,375],[755,365],[815,405],[840,465],[805,510],[745,530],[680,520],[610,510]],PAL.wood,1100,17,.2);
+  // Crossed legs in a meditative seated posture.
+  poly(g,[[570,455],[620,425],[675,445],[720,475],[775,450],[824,467],[850,500],[820,530],[755,545],[690,530],[620,540],[555,515],[535,485]],PAL.wood,950,17,.15);
+  // Torso and shoulders, deliberately carved and burnt.
+  poly(g,[[610,250],[640,210],[690,190],[740,205],[778,250],[790,335],[765,400],[710,425],[650,400],[615,340]],PAL.wood,1000,20,-.5);
+  // Neck and bowed head.
+  poly(g,[[670,180],[680,140],[720,130],[750,150],[755,200],[725,225],[690,210]],PAL.wood,420,15,-.7);
+  // Face shadow, hollow eyes, no literal facial realism.
+  path(g,[[685,174],[700,183],[715,181],[730,173]],['#090711','#160b1d'],8,4);
+  path(g,[[700,200],[715,205],[730,199]],PAL.magenta,3,3);
+  // Chest cavity: torn aperture with dark ribs around it.
+  g.noStroke();g.fill('#05040c');g.ellipse(702,315,78,104);
+  for(let i=0;i<7;i++){
+    let y=275+i*13;
+    path(g,[[650,y],[674,y+8],[700,y+11],[729,y+6],[753,y-3]],PAL.ash,random(3,7),2);
+  }
+  path(g,[[660,270],[640,300],[652,340],[674,361]],PAL.gold,2,2);
+  path(g,[[750,268],[769,300],[755,345],[735,365]],PAL.magenta,3,2);
+  // Purple lacquer and burnt grain marks across the body.
+  for(let i=0;i<180;i++){
+    let x=random(600,800),y=random(220,510);
+    g.stroke(random(PAL.wood));g.strokeWeight(random(.5,2));
+    g.line(x,y,x+random(-8,8),y+random(5,18));
+  }
+}
+function paintHeartAndConnections(g){
+  // Detached heart hangs in front-left of the empty chest, tilted toward viewer.
+  // Anatomical silhouette with broad ventricles and upper atria.
+  poly(g,[[340,190],[305,155],[270,160],[245,190],[250,235],[280,275],[325,325],[370,355],[415,326],[455,286],[480,245],[478,205],[450,180],[415,180],[385,205],[365,230]],PAL.blood,1300,21,-.55);
+  poly(g,[[280,195],[315,175],[350,198],[370,236],[355,285],[325,310],[290,270],[270,235]],PAL.crimson,450,13,-.8);
+  poly(g,[[380,215],[420,185],[455,198],[463,232],[435,275],[405,305],[370,285]],['#7f102c','#a51a43','#cf3156'],430,13,.6);
+  // Veins and aorta growing from the top of the heart.
+  strand(g,[[350,198],[340,150],[360,110],[395,85],[425,92],[430,130],[410,150]],PAL.crimson,19,true);
+  strand(g,[[380,205],[405,160],[450,145],[490,155],[505,190]],PAL.maroon,14,true);
+  strand(g,[[325,202],[300,165],[295,125],[315,100]],PAL.magenta,11,true);
+  // Azure/cerulean wound and flowing blue substance.
+  g.noStroke();g.fill('#080b2b');g.ellipse(355,260,65,35);
+  poly(g,[[328,252],[345,235],[372,238],[392,258],[380,280],[350,287],[326,273]],['#073f91','#087eae','#169ec9','#52c9df'],360,12,.2);
+  strand(g,[[355,270],[365,310],[390,345],[420,380],[450,420],[470,470]],PAL.cerulean,13,true);
+  strand(g,[[373,267],[405,290],[430,320],[465,340],[500,370]],PAL.blue,8,true);
+  // Hanging arteries connect the removed heart to the chest cavity.
+  strand(g,[[450,205],[500,220],[545,250],[590,270],[640,292],[682,305]],PAL.blood,12,true);
+  strand(g,[[430,285],[475,305],[515,330],[560,342],[615,330],[665,318]],PAL.magenta,8,true);
+  strand(g,[[420,320],[470,365],[520,395],[575,405],[625,385],[665,350]],PAL.maroon,10,true);
+  // Gold and pale highlights on wet torn tissue.
+  for(let i=0;i<75;i++){
+    let x=random(260,480),y=random(160,340);
+    g.stroke(random(PAL.gold));g.strokeWeight(random(1,3));
+    g.line(x,y,x+random(3,13),y+random(-2,4));
+  }
+}
+function paintPigmentFinish(g){
+  // Palette-knife scumbles and raised ridges across the entire painting.
+  for(let i=0;i<8500;i++){
+    let x=random(W),y=random(H),a=random(-.7,.7),l=random(4,26);
+    g.stroke(random([...PAL.crimson,...PAL.magenta,...PAL.indigo,...PAL.teal,...PAL.gold]));
+    g.strokeWeight(random(.35,2.2));g.line(x,y,x+cos(a)*l,y+sin(a)*l);
+  }
+  // Local gold glints and dark impasto pits.
+  for(let i=0;i<450;i++){
+    let x=random(W),y=random(H);
+    if(random()<.55){g.stroke(random(PAL.gold));g.strokeWeight(random(.7,2));g.line(x,y,x+random(2,8),y-random(1,4));}
+    else{g.noStroke();g.fill('#08040c');g.ellipse(x,y,random(1,5),random(1,4));}
+  }
+  // Vignette-like painted darkness.
+  g.noFill();
+  for(let i=0;i<22;i++){g.stroke(4,1,10,8);g.strokeWeight(8);g.rect(i*2,i*2,W-i*4,H-i*4,50);}
+}
+function fisheye(g){
+  // Diagonal camera roll + radial fisheye projection, sampled into a new image.
+  const out=createImage(W,H);out.loadPixels();g.loadPixels();
+  const cx=W/2,cy=H/2,FL=410,F2=520,roll=-.22;
+  const cr=Math.cos(roll),sr=Math.sin(roll);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let dx=x-cx,dy=y-cy;
+    // inverse screen roll
+    let rx=dx*cr-dy*sr,ry=dx*sr+dy*cr;
+    let rd=Math.hypot(rx,ry),r=FL*Math.tan(Math.min(rd/F2,1.32));
+    let scale=rd>0?r/rd:1;
+    let sx=Math.round(cx+rx*scale),sy=Math.round(cy+ry*scale);
+    let oi=4*(y*W+x);
+    if(sx>=0&&sx<W&&sy>=0&&sy<H){
+      let si=4*(sy*W+sx);
+      out.pixels[oi]=g.pixels[si];out.pixels[oi+1]=g.pixels[si+1];
+      out.pixels[oi+2]=g.pixels[si+2];out.pixels[oi+3]=255;
+    }else{
+      out.pixels[oi]=10;out.pixels[oi+1]=3;out.pixels[oi+2]=12;out.pixels[oi+3]=255;
+    }
+  }
+  out.updatePixels();return out;
+}
+</script>
+<p>Static generative oil painting · seed 41 · edit SEED in the source for a new fixed composition</p>
+</body>
+</html>
