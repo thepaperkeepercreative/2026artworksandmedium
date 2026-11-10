@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcane Storm</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<style>
+  :root{--bg:#0b1020;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  html{scroll-padding-top:env(safe-area-inset-top,0px)}
+  html,body{margin:0;background:var(--bg)}
+  body{min-height:100vh;display:grid;place-items:center}
+  /* FIX 1: p5 writes inline width/height in pixels onto the canvas. !important beats inline styles,
+     so the 9:16 wallpaper now scales to fit any screen instead of overflowing and getting cropped. */
+  canvas{display:block;width:min(100vw,56.25vh)!important;height:auto!important}
+</style>
+</head>
+<body>
+<script>
+/* ======================================================================
+   ARCANE STORM  v2  -  portrait phone wallpaper, oil-on-canvas finish
+   Low-angle point of view: we look UP at Viktor, floating, casting. v4: Viktor now an abstract, off-centre figure with the ANOMALY (membranes, bubbles, orb);
+   v3: Viktor redrawn after the reference art
+   (beaked helm, horns, scaled body, gold plates, staff, hextech claw + death ray), hexagonal anomaly lightning.
+
+   WHY THE FIRST VERSION DID NOT SHOW PROPERLY
+   FIX 1 (CSS above): inline canvas pixel sizes overrode the stylesheet.
+   FIX 2 (colour): p5 cannot take a hex string plus an alpha, e.g.
+         stroke('#12bce9', 80)  -> the colour is invalid, so the alpha is lost
+         and strokes stay opaque/black. Every colour here goes through col()
+         or dab(), which build a real p5 colour object first.
+
+   PAINTING TOOLS
+     dab()    one oil dab: thick bristle lines of varying brightness
+     ribbon() a tapering energy stream made of dabs along a smooth curve
+     shade()  fills ANY polygon with strokes lit from a direction, then adds
+              a cyan rim light on the edges that face the light
+     limb()   a tapered limb/horn built from shade()
+     glow()   soft light bloom (radial gradient, additive blend)
+     bake()   oil finish: paint height, canvas weave, cracks, varnish
+   Perspective: every vertical line aims at the storm's eye (VP) above him,
+   like looking straight up between collapsing towers.
+   ====================================================================== */
+p5.disableFriendlyErrors = true;
+const W = 900, H = 1600, SEED = 41, VP = [330, 430], TAU = Math.PI * 2;
+const P = {   // indigo, gold, rust, lightning, pink, earth, gravitas
+  ground: '#2a2040', slate: '#6b5440', pale: '#cbb89a', cyan: '#6fd8ff', ice: '#b9f0ff', teal: '#3a5a8a',
+  indigo: '#2a2478', violet: '#4a3fa8', purple: '#a994e6', gold: '#d6a53d', ochre: '#a4502a', maroon: '#6e2f1a',
+  bone: '#cbb89a', white: '#eefcff', magenta: '#e0679f', deep: '#0e0a1c', orange: '#c8702a', pink: '#e0679f', pinkL: '#f4a3c4'
+};
+const rnd = (a, b) => random(a, b);
+
+function setup() {
+  createCanvas(W, H); pixelDensity(1); randomSeed(SEED); noiseSeed(SEED); noLoop();
+  sky(); spiralArms(); towers(); explosion(50, 1330, 320); runeCircle(); stones(true); anomalySky();
+  deathRay(700, 175, 10, 1330); viktor(); stones(false);
+  stormStreams(); bolts(); foreground(); sparks(); vignette(); bake();
+}
+function draw() {}
+function doubleClicked() { saveCanvas('arcane_storm', 'png'); }   // double-click / double-tap saves the 900x1600 wallpaper
+function keyPressed() { if (key === 's') saveCanvas('arcane_storm', 'png'); }
+
+/* ---------- TOOLS ---------- */
+// col(): the FIX. Always build a real colour with alpha instead of passing (string, alpha) to stroke/fill.
+function col(c, a = 255) { const k = color(c); return color(red(k), green(k), blue(k), a); }
+function ramp(stops, t) {                                   // colour along a gradient defined by [position, colour] stops
+  t = constrain(t, 0, 1);
+  for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) return lerpColor(color(stops[i-1][1]), color(stops[i][1]), (t - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]));
+  return color(stops[stops.length - 1][1]);
+}
+function dab(x, y, a, len, w, c, al = 220) {                // one oil dab = parallel bristle lines, each a little lighter/darker
+  const n = max(2, round(w / 2)), dx = cos(a), dy = sin(a), base = color(c); noFill();
+  for (let i = 0; i < n; i++) {
+    const o = (i - n/2) * 1.8 + rnd(-.5, .5), l = len * rnd(.8, 1), k = lerpColor(base, color(random() < .5 ? 0 : 255), rnd(0, .25));
+    k.setAlpha(al * rnd(.7, 1)); stroke(k); strokeWeight(rnd(1.4, 2.6));
+    line(x - dy*o, y + dx*o, x - dy*o + dx*l, y + dx*o + dy*l);
+  }
+}
+function smooth(p) {                                         // Catmull-Rom smoothing so ribbons curve instead of kinking
+  const o = [];
+  for (let i = 0; i < p.length - 1; i++) {
+    const a = p[Math.max(i-1, 0)], b = p[i], c = p[i+1], d = p[Math.min(i+2, p.length-1)];
+    for (let t = 0; t < 1; t += .25) o.push([curvePoint(a[0], b[0], c[0], d[0], t), curvePoint(a[1], b[1], c[1], d[1], t)]);
+  }
+  o.push(p[p.length - 1]); return o;
+}
+function ribbon(pts, w0, w1, c, al = 200) {                  // tapering stream of dabs along a smooth curve
+  const s = smooth(pts), n = s.length;
+  for (let i = 1; i < n - 1; i++) dab(s[i][0], s[i][1], atan2(s[i+1][1] - s[i-1][1], s[i+1][0] - s[i-1][0]), 14, lerp(w0, w1, i / n), c, al * (.6 + .4 * noise(i * .1)));
+}
+function glow(x, y, r, c, a) {                               // soft additive light bloom
+  const k = color(c), g = drawingContext.createRadialGradient(x, y, 0, x, y, r), s = `${floor(red(k))},${floor(green(k))},${floor(blue(k))}`;
+  g.addColorStop(0, `rgba(${s},${a})`); g.addColorStop(.45, `rgba(${s},${a * .35})`); g.addColorStop(1, `rgba(${s},0)`);
+  push(); blendMode(ADD); drawingContext.fillStyle = g; drawingContext.fillRect(x - r, y - r, r * 2, r * 2); pop();
+}
+function inside(x, y, p) {                                   // point-in-polygon (ray casting)
+  let c = false;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const a = p[i], b = p[j]; if (((a[1] > y) != (b[1] > y)) && x < (b[0]-a[0]) * (y-a[1]) / (b[1]-a[1]) + a[0]) c = !c; }
+  return c;
+}
+// shade(): paint a polygon. Underpaint, then strokes whose colour runs base->lite toward the light, then rim light.
+function shade(pts, base, lite, lx, ly, rim, k = 1, rim2 = null) {
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, R = Math.hypot(x1 - x0, y1 - y0) / 2 || 1;
+  if (lx == null) { const l = Math.hypot(VP[0] - cx, VP[1] - cy) || 1; lx = (VP[0] - cx) / l; ly = (VP[1] - cy) / l; }   // default light = the storm's eye
+  noStroke(); fill(col(base)); beginShape(); pts.forEach(p => vertex(p[0], p[1])); endShape(CLOSE);
+  const n = Math.min(4200, Math.floor((x1 - x0) * (y1 - y0) / 55 * k)), cb = color(base), cl = color(lite), ang = Math.atan2(ly, lx) + Math.PI / 2;
+  for (let i = 0; i < n; i++) {
+    const x = rnd(x0, x1), y = rnd(y0, y1); if (!inside(x, y, pts)) continue;
+    const g = constrain(.38 + ((x - cx) * lx + (y - cy) * ly) / R * .6 + (noise(x*.02, y*.02) - .5) * .5, 0, 1);
+    dab(x, y, ang + rnd(-.5, .5), rnd(8, 22), rnd(3, 7), lerpColor(cb, cl, g), 200);
+  }
+  let ar = 0; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i+1) % pts.length]; ar += a[0]*b[1] - b[0]*a[1]; }
+  const sg = ar > 0 ? 1 : -1;                                                  // winding decides which side is "outside"
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i+1) % pts.length], ex = b[0] - a[0], ey = b[1] - a[1], l = Math.hypot(ex, ey) || 1, d = sg * ey / l * lx - sg * ex / l * ly;
+    if (d > .15) dab(a[0], a[1], Math.atan2(ey, ex), l, 3.5, rim, 220 * d);    // edge faces the light -> rim highlight
+    const d2 = sg * ey / l * -.6 - sg * ex / l * .8; if (rim2 && d2 > .3) dab(a[0], a[1], Math.atan2(ey, ex), l, 3.5, rim2, 190 * d2);   // warm bounce light from the blast, lower left
+  }
+}
+function limb(p, q, w0, w1, base, lite, rim = P.ice, rim2 = null) {      // tapered limb / horn / finger
+  const a = Math.atan2(q[1] - p[1], q[0] - p[0]) + Math.PI / 2, nx = Math.cos(a), ny = Math.sin(a);
+  shade([[p[0] + nx*w0/2, p[1] + ny*w0/2], [q[0] + nx*w1/2, q[1] + ny*w1/2], [q[0] - nx*w1/2, q[1] - ny*w1/2], [p[0] - nx*w0/2, p[1] - ny*w0/2]], base, lite, null, null, rim, 1, rim2);
+}
+function hex(x, y, r, rot, c, w, al = 200) {
+  push(); noFill(); stroke(col(c, al)); strokeWeight(w); beginShape();
+  for (let i = 0; i < 6; i++) vertex(x + Math.cos(rot + i * TAU / 6) * r, y + Math.sin(rot + i * TAU / 6) * r);
+  endShape(CLOSE); pop();
+}
+
+/* ---------- 1. SKY: the cyclone, painted as swirling strokes around the eye ---------- */
+const SKY = [[0, P.white], [.06, P.ice], [.16, P.purple], [.3, P.magenta], [.45, P.indigo], [.62, '#171344'], [.8, P.ground], [1, P.deep]];
+function sky() {
+  background(P.deep);
+  for (let i = 0; i < 14000; i++) {                          // strokes follow circles around VP, pitched slightly inward
+    const th = rnd(TAU), r = pow(random(), 1.5) * 1300 + 20, x = VP[0] + cos(th) * r, y = VP[1] + sin(th) * r, t = r / 1300 + (noise(th * 1.5, r * .003) - .5) * .3;
+    dab(x, y, th + HALF_PI - .4, rnd(25, 90) * (.4 + r / 1300), rnd(4, 15) * (.5 + r / 1300), random() < .07 ? color(random([P.ochre, P.gold, P.slate])) : ramp(SKY, t), rnd(110, 210));
+  }
+  glow(VP[0], VP[1], 420, P.ice, .5); glow(VP[0], VP[1], 900, P.cyan, .18);
+}
+function spiralArms() {                                      // logarithmic spirals: radius grows, angle keeps turning
+  for (let k = 0; k < 9; k++) {
+    const pts = [];
+    for (let r = 60; r < 1250; r += 40) { const th = k * TAU / 9 + 1.7 * Math.log(r / 60) + noise(k, r * .01) * .5; pts.push([VP[0] + cos(th) * r, VP[1] + sin(th) * r]); }
+    ribbon(pts, 10, 34, k % 3 ? P.cyan : (k % 2 ? P.ice : P.violet), 170);
+    ribbon(pts.map(p => [p[0] + rnd(-6, 6), p[1] + rnd(-6, 6)]), 3, 9, P.white, 150);   // hot core of each arm
+  }
+}
+
+/* ---------- 2. COLLAPSING TOWERS: verticals converge on the eye ---------- */
+function towers() {
+  for (const side of [-1, 1]) for (let i = 0; i < 8; i++) {
+    const bw = rnd(70, 170), bx = side < 0 ? rnd(-70, 170) : rnd(W - 170, W + 70), t = rnd(.3, .75);
+    const BL = [bx, 1660], BR = [bx + bw, 1660], TL = [lerp(BL[0], VP[0], t), lerp(1660, VP[1], t)], TR = [lerp(BR[0], VP[0], t), TL[1]], jag = [];   // top corners slide toward VP
+    for (let k = 1; k < 4; k++) jag.push([lerp(TL[0], TR[0], 1 - k / 4) + rnd(-8, 8), TL[1] + rnd(-70, 40)]);                                       // broken, ragged top
+    shade([BL, BR, TR, ...jag, TL], random(['#0e0a1c', '#1d1430', '#241830']), random(['#6b5440', '#a4502a', '#3a2f5a']), null, null, P.ice, .8);
+    for (let j = 0; j < 9; j++) {                                                                                                                      // lit windows
+      const s = rnd(.1, .9), A = [lerp(BL[0], TL[0], s), lerp(BL[1], TL[1], s)], B = [lerp(BR[0], TR[0], s), lerp(BR[1], TR[1], s)], u = rnd(.1, .6);
+      dab(lerp(A[0], B[0], u), lerp(A[1], B[1], u), Math.atan2(B[1] - A[1], B[0] - A[0]), dist(A[0], A[1], B[0], B[1]) * rnd(.1, .3), 2, random([P.gold, P.cyan, P.ice]), 140);
+    }
+  }
+}
+
+/* ---------- 3. ARCANE CIRCLE: glyph rings seen from below ---------- */
+function glyph(x, y, a, s, c, kind) {
+  push(); translate(x, y); rotate(a); noFill(); stroke(col(c, 190)); strokeWeight(2);
+  if (kind === 0) { line(-s, 0, s, 0); line(0, -s, 0, s); } else if (kind === 1) triangle(-s, s, s, s, 0, -s); else hex(0, 0, s, 0, c, 2);
+  pop();
+}
+function runeCircle() {
+  const cx = 330, cy = 520; glow(cx, cy, 480, P.violet, .22);
+  for (let ring = 0; ring < 6; ring++) {
+    const rx = 150 + ring * 62, ry = rx * .88, c = ring % 2 ? P.gold : P.ice;
+    push(); noFill(); blendMode(ADD);
+    for (let s = 0; s < 5; s++) {                                                // broken ring segments, with a soft halo under each
+      const a0 = rnd(TAU), a1 = a0 + rnd(.7, 1.9);
+      stroke(col(c, 150 - ring * 12)); strokeWeight(2 + ring % 3 * 2); arc(cx, cy, rx * 2, ry * 2, a0, a1);
+      stroke(col(c, 40)); strokeWeight(9 + ring * 1.5); arc(cx, cy, rx * 2, ry * 2, a0, a1);
+    }
+    pop();
+    for (let i = 0, n = 14 + ring * 3; i < n; i++) { const a = i * TAU / n + ring * .3; glyph(cx + cos(a) * rx, cy + sin(a) * ry, a, 6 + ring * 1.3, c, i % 3); }
+  }
+  hex(cx, cy, 110, 0, P.cyan, 3); hex(cx, cy, 110, Math.PI / 6, P.ice, 3);       // inner hexagram
+}
+
+/* ---------- 4. FLOATING STONES: depth d = 0 near the viewer, 1 far, near the eye ---------- */
+let ST = null;
+function makeStones() {
+  ST = [];
+  for (let i = 0; i < 64; i++) {
+    const d = pow(random(), .8), th = rnd(TAU), r = lerp(780, 150, d) * rnd(.55, 1.15), x = VP[0] + cos(th) * r, y = VP[1] + sin(th) * r * 1.25;
+    if (d <= .28 && x > 380 && y > 150 && y < 1560) continue;          // keep near stones from hiding Viktor
+    ST.push({ d, th, r, x, y, s: lerp(110, 12, pow(d, .7)) * rnd(.7, 1.3), rot: rnd(TAU) });
+  }
+  ST.sort((a, b) => b.d - a.d);                                                    // far first (painter's algorithm)
+}
+function stones(far) { if (!ST) makeStones(); for (const o of ST) if ((o.d > .28) === far) stone(o.x, o.y, o.s, o); }
+function stone(x, y, s, o) {
+  const n = floor(rnd(7, 10)), pts = [];
+  for (let i = 0; i < n; i++) { const a = TAU * i / n + o.rot, r = s * rnd(.55, 1.15); pts.push([x + cos(a) * r, y + sin(a) * r * .75]); }
+  const hz = pow(o.d, 1.2);                                                        // atmospheric haze: far stones sink into the sky colour
+  const base = lerpColor(color(random(['#241e2c', '#2d2a3a', '#3a3040', '#1a2236'])), color(P.indigo), hz * .6);
+  const lite = lerpColor(color(random([P.bone, P.ochre, P.pale, '#6d7780'])), color(P.violet), hz * .7);
+  const l = Math.hypot(VP[0] - x, VP[1] - y) || 1;
+  shade(pts, base, lite, (VP[0] - x) / l, (VP[1] - y) / l, P.ice, .9);             // each stone is lit from the eye of the storm
+  for (let i = 0; i < 4; i++) { const p = random(pts), q = random(pts); dab(p[0], p[1], atan2(q[1] - p[1], q[0] - p[0]), dist(p[0], p[1], q[0], q[1]) * .6, 2, '#05070d', 150); }   // cracks
+  const a = o.th + HALF_PI;
+  for (let i = 0; i < 3; i++) dab(x - cos(a) * s * .8, y - sin(a) * s * .8 + rnd(-s, s) * .3, a, s * rnd(.8, 2), rnd(2, 5), P.pale, rnd(30, 70));   // dust trail
+}
+
+/* ---------- 5. VIKTOR (after the reference art) ---------- */
+// Extra helpers for this character
+function skin(pts, n) {                                      // scaled flesh: short dark/light scale dabs + tiny hextech glints
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  for (let i = 0; i < n; i++) {
+    const x = rnd(x0, x1), y = rnd(y0, y1); if (!inside(x, y, pts)) continue;
+    dab(x, y, rnd(TAU), rnd(4, 9), 3, random(['#4a5f9a', '#1d2748', '#6f86c8']), rnd(60, 130));
+    if (random() < .18) { push(); blendMode(ADD); stroke(col(random([P.ice, P.violet, P.white]), rnd(120, 230))); strokeWeight(rnd(1, 2.4)); point(x, y); pop(); }
+  }
+}
+function cloth(pts, w, e) {                                  // floating dark cloak end: body, lit edge, red lining
+  ribbon(pts, w, w * .35, '#0f1a33', 235); ribbon(pts.map(p => [p[0] - w * .28, p[1] - w * .1]), w * .35, e * .3, '#3a5280', 190); ribbon(pts.map(p => [p[0] + w * .35, p[1] + w * .15]), 4, 2, '#b02a3c', 220);
+}
+function gear(x, y, r, teeth) {                              // background clockwork, like the machinery behind him
+  const o = []; for (let i = 0; i < teeth * 2; i++) { const a = i * Math.PI / teeth, rr = i % 2 ? r * .9 : r; o.push([x + cos(a) * rr, y + sin(a) * rr]); }
+  shade(o, '#14293a', '#4f7285', null, null, P.ice, .6);
+  noStroke(); fill(col(P.deep, 235)); ellipse(x, y, r * 1.2, r * 1.2);
+  for (let k = 0; k < 3; k++) { noFill(); stroke(col(P.teal, 120)); strokeWeight(4); ellipse(x, y, r * (1.25 + k * .25), r * (1.25 + k * .25)); }
+}
+const FIRE = [[0, '#fff0c0'], [.25, '#f3d27a'], [.5, '#c8702a'], [.75, '#a4502a'], [1, '#3a1a22']];
+function explosion(cx, cy, R) {                              // warm blast: the complement to all that cold blue
+  for (let i = 0; i < 5200; i++) {
+    const th = rnd(TAU), r = pow(random(), .8) * R, x = cx + cos(th) * r * 1.15, y = cy + sin(th) * r * .9, t = r / R + (noise(x * .01, y * .01) - .5) * .35;
+    dab(x, y, th + rnd(-1, 1), rnd(18, 60), rnd(6, 18), ramp(FIRE, t), rnd(130, 230));
+  }
+  glow(cx, cy, R * 1.3, P.orange, .55); glow(cx, cy, R * .5, '#fff0b0', .8);
+  for (let i = 0; i < 40; i++) { const a = rnd(TAU), d = R * rnd(.4, 1.4), x = cx + cos(a) * d, y = cy + sin(a) * d * .8, s = rnd(6, 20);
+    shade([[x, y], [x + s, y + s * .3], [x + s * .6, y + s], [x - s * .3, y + s * .6]], '#1a1620', '#6b4a3a', null, null, P.orange, .5); }
+}
+// hexBolt(): HEXTECH lightning. It can only turn in 60-degree steps (the hex lattice), so it zig-zags in geometric
+// angles. Three glow passes + a magenta offset copy (the ANOMALY's glitchy fringe) + small hex joints + forks.
+function hexBolt(x1, y1, x2, y2, w = 3, depth = 0) {
+  const S60 = Math.PI / 3, pts = [[x1, y1]]; let x = x1, y = y1, a = Math.round(Math.atan2(y2 - y1, x2 - x1) / S60) * S60;
+  for (let i = 0; i < 26 && dist(x, y, x2, y2) > 26; i++) {
+    const want = Math.atan2(y2 - y, x2 - x), diff = o => Math.abs(Math.atan2(Math.sin(o - want), Math.cos(o - want))), opts = [a - S60, a, a + S60];
+    a = random() < .7 ? opts.reduce((b, o) => diff(o) < diff(b) ? o : b) : random(opts);
+    const l = rnd(16, 52); x += cos(a) * l; y += sin(a) * l; pts.push([x, y]);
+  }
+  pts.push([x2, y2]);
+  push(); blendMode(ADD); noFill();
+  [[w * 5, P.violet, 38], [w * 2.4, P.cyan, 95], [w * .9, P.white, 235]].forEach(([ww, c, al]) => { stroke(col(c, al)); strokeWeight(ww); beginShape(); pts.forEach(p => vertex(p[0], p[1])); endShape(); });
+  stroke(col(P.magenta, 90)); strokeWeight(w * .8); beginShape(); pts.forEach(p => vertex(p[0] + 4, p[1] - 2)); endShape();
+  pts.forEach((p, i) => { if (i % 2 === 0 && i > 0) hex(p[0], p[1], rnd(4, 9), a, P.ice, 1.5, 200); });
+  if (depth < 2) for (let k = 0; k < 2; k++) { const p = random(pts); if (random() < .55) hexBolt(p[0], p[1], p[0] + rnd(-110, 110), p[1] + rnd(40, 160), w * .6, depth + 1); }
+  pop();
+}
+function anomaly(x, y, r) {                                  // the Anomaly: radial hex lightning + floating crystal shards in violet/cyan/magenta
+  for (let i = 0; i < 9; i++) { const a = rnd(TAU); hexBolt(x, y, x + cos(a) * r * rnd(.6, 1.2), y + sin(a) * r * rnd(.6, 1.2), 2.2, 1); }
+  push(); blendMode(ADD);
+  for (let i = 0; i < 12; i++) {
+    const a = rnd(TAU), d = r * rnd(.3, 1.1), sx = x + cos(a) * d, sy = y + sin(a) * d, s = rnd(5, 16);
+    fill(col(random([P.violet, P.cyan, P.magenta]), 70)); stroke(col(P.ice, 200)); strokeWeight(1.4);
+    beginShape(); for (let k = 0; k < 6; k++) vertex(sx + cos(a + k * TAU / 6) * s, sy + sin(a + k * TAU / 6) * s * (k % 2 ? 1 : .6)); endShape(CLOSE);
+  }
+  pop();
+}
+function deathRay(x1, y1, x2, y2) {                          // layered beam + flattened hex rings along it + crackle + blast ends
+  const a = Math.atan2(y2 - y1, x2 - x1);
+  push(); blendMode(ADD); noFill(); strokeCap(ROUND);
+  [[96, P.violet, 34], [62, P.cyan, 60], [34, P.ice, 120], [14, P.white, 255]].forEach(([w, c, al]) => { stroke(col(c, al)); strokeWeight(w); line(x1, y1, x2, y2); });
+  pop();
+  for (let t = .05; t < 1; t += .055) { push(); translate(lerp(x1, x2, t), lerp(y1, y2, t)); rotate(a + HALF_PI); scale(1, .28); blendMode(ADD); hex(0, 0, 34 + 14 * Math.sin(t * 40), t * 3, P.ice, 3, 200); pop(); }
+  for (let i = 0; i < 8; i++) { const t = rnd(.1, .9), x = lerp(x1, x2, t), y = lerp(y1, y2, t); hexBolt(x, y, x + rnd(-130, 130), y + rnd(-60, 100), 2.4, 1); }
+  glow(x1, y1, 170, P.white, .95); glow(x2, y2, 300, P.orange, .9);
+}
+
+/* ---------- ORGANIC FORMS (less geometry): curved limbs and wobbling blobs, painted with shade() ---------- */
+function blotch(x, y, rx, ry, c, al, n = 8) {              // soft glaze: stacked, jittered, shrinking ellipses (no hard edge)
+  noStroke();
+  for (let i = 0; i < n; i++) { const s = 1 - i / n * .6; fill(col(c, al / n * 1.6)); ellipse(x + rnd(-1.5, 1.5), y + rnd(-1.5, 1.5), rx * 2 * s * rnd(.85, 1.1), ry * 2 * s * rnd(.85, 1.1)); }
+}
+function limbC(pts, w0, w1, base, lite, rim = P.cyan, rim2 = null, k = 1) {   // a curved, tapering form built along a smooth centreline
+  const s = smooth(pts), n = s.length, Lp = [], Rp = [];
+  for (let i = 0; i < n; i++) {
+    const a = s[Math.max(i - 1, 0)], b = s[Math.min(i + 1, n - 1)], ang = Math.atan2(b[1] - a[1], b[0] - a[0]) + Math.PI / 2, t = i / (n - 1), w = lerp(w0, w1, t) * (1 + .1 * Math.sin(t * 9 + w0));
+    Lp.push([s[i][0] + Math.cos(ang) * w / 2, s[i][1] + Math.sin(ang) * w / 2]); Rp.push([s[i][0] - Math.cos(ang) * w / 2, s[i][1] - Math.sin(ang) * w / 2]);
+  }
+  shade(Lp.concat(Rp.reverse()), base, lite, null, null, rim, k, rim2);
+}
+function blobC(cx, cy, rx, ry, rot, base, lite, rim = P.cyan, k = 1, wob = .1, rim2 = null) {   // an ellipse whose outline wobbles with noise
+  const o = [];
+  for (let i = 0; i < 30; i++) { const a = i * TAU / 30, r = 1 + (noise(Math.cos(a) * .9 + cx * .01, Math.sin(a) * .9 + cy * .01) - .5) * wob * 2, x = Math.cos(a) * rx * r, y = Math.sin(a) * ry * r; o.push([cx + x * Math.cos(rot) - y * Math.sin(rot), cy + x * Math.sin(rot) + y * Math.cos(rot)]); }
+  shade(o, base, lite, null, null, rim, k, rim2);
+}
+function armlet(cx, cy, rx, ry, rot) {                       // gold band around an arm
+  const p = []; for (let a = 0; a < TAU + .3; a += .3) p.push([cx + Math.cos(a) * rx * Math.cos(rot) - Math.sin(a) * ry * Math.sin(rot), cy + Math.cos(a) * rx * Math.sin(rot) + Math.sin(a) * ry * Math.cos(rot)]);
+  ribbon(p, 13, 13, P.gold, 240); ribbon(p.map(q => [q[0], q[1] - 4]), 4, 4, '#fff0b0', 200);
+}
+
+/* ---------- THE ANOMALY: iridescent membranes with holes and thorned edges, bubbles with windows, spiked orbs ---------- */
+const IRI = [[0, P.pink], [.22, P.purple], [.45, P.violet], [.65, P.cyan], [.82, P.gold], [1, P.ochre]];   // colour shifts along the membrane
+function membrane(pts, w0, w1, ph = 0) {
+  const s = smooth(pts), n = s.length, hs = [];
+  const wAt = i => lerp(w0, w1, i / n) * (.8 + .4 * noise(i * .08 + ph)), ang = i => Math.atan2(s[Math.min(i + 1, n - 1)][1] - s[Math.max(i - 1, 0)][1], s[Math.min(i + 1, n - 1)][0] - s[Math.max(i - 1, 0)][0]);
+  for (let k = 0; k < Math.max(3, n / 5); k++) { const i = floor(rnd(3, n - 3)), a = ang(i), o = rnd(-.3, .3), w = wAt(i); hs.push({ x: s[i][0] - Math.sin(a) * o * w, y: s[i][1] + Math.cos(a) * o * w, a, rx: rnd(10, 38), ry: rnd(4, 12) }); }   // lace holes
+  for (let i = 1; i < n - 1; i++) {
+    const a = ang(i), w = wAt(i), t = i / n, nx = -Math.sin(a), ny = Math.cos(a);
+    for (let o = -.5; o <= .5; o += .08) {                    // paint across the width, skipping any spot inside a hole
+      const x = s[i][0] + nx * o * w, y = s[i][1] + ny * o * w;
+      if (hs.some(h => { const dx = x - h.x, dy = y - h.y, u = (dx * Math.cos(h.a) + dy * Math.sin(h.a)) / h.rx, v = (-dx * Math.sin(h.a) + dy * Math.cos(h.a)) / h.ry; return u * u + v * v < 1; })) continue;
+      const c = lerpColor(ramp(IRI, (t * 1.2 + noise(i * .05, o * 2 + ph) * .9 + ph) % 1), color(P.deep), Math.pow(Math.abs(o) * 2, 3) * .75);   // dark toward the edges
+      c.setAlpha(205); stroke(c); strokeWeight(3.4); line(x, y, x + Math.cos(a) * 9, y + Math.sin(a) * 9);
+    }
+    if (i % 4 === 0 && random() < .7) { const sg = random([-1, 1]); dab(s[i][0] + nx * sg * .5 * w, s[i][1] + ny * sg * .5 * w, a + sg * HALF_PI + rnd(-.5, .5), rnd(8, 26), 3, random([P.deep, P.violet, P.pink]), 210); }   // thorns
+  }
+  for (const h of hs) { push(); translate(h.x, h.y); rotate(h.a); noFill(); stroke(col(P.deep, 200)); strokeWeight(2); ellipse(0, 0, h.rx * 2, h.ry * 2); pop(); }   // dark lip around each hole
+}
+function win(x, y, rx, ry, rot) {                            // an iridescent "window" with a dark membrane rim (gradient clipped to an ellipse)
+  const c = drawingContext; c.save(); c.translate(x, y); c.rotate(rot); c.beginPath(); c.ellipse(0, 0, rx, ry, 0, 0, TAU); c.clip();
+  const g = c.createLinearGradient(-rx, -ry, rx, ry); g.addColorStop(0, '#f3d27a'); g.addColorStop(.4, '#e0679f'); g.addColorStop(.75, '#a994e6'); g.addColorStop(1, '#6fd8ff');
+  c.fillStyle = g; c.fillRect(-rx, -ry, rx * 2, ry * 2); c.restore();
+  push(); translate(x, y); rotate(rot); noFill(); stroke(col(P.deep, 230)); strokeWeight(3); ellipse(0, 0, rx * 2, ry * 2); stroke(col(P.cyan, 140)); strokeWeight(1); ellipse(-1, -1, rx * 2 - 4, ry * 2 - 4); pop();
+  for (let i = 0; i < 4; i++) dab(x + rnd(-rx, rx) * .5, y + rnd(-ry, ry) * .5, rnd(TAU), rx * .6, 3, random([P.pink, P.indigo, P.gold]), 130);
+}
+function bubble(x, y, r) {                                   // soap-bubble: faint iridescent sphere with a few windows
+  const c = drawingContext, g = c.createRadialGradient(x - r * .3, y - r * .3, r * .1, x, y, r);
+  g.addColorStop(0, 'rgba(255,255,255,.22)'); g.addColorStop(.7, 'rgba(169,148,230,.08)'); g.addColorStop(1, 'rgba(224,103,159,.35)');
+  c.save(); c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill(); c.restore();
+  push(); noFill(); stroke(col(P.pinkL, 120)); strokeWeight(2); ellipse(x, y, r * 2, r * 2); stroke(col(P.cyan, 90)); strokeWeight(1); ellipse(x + 3, y + 2, r * 1.9, r * 1.9); pop();
+  for (let k = 0; k < 3; k++) { const a = rnd(TAU), d = r * rnd(.1, .6); win(x + Math.cos(a) * d, y + Math.sin(a) * d, r * rnd(.15, .3), r * rnd(.1, .2), rnd(TAU)); }
+}
+function anomalyOrb(x, y, r) {                               // the dark spiked orb with iridescent windows (your first reference)
+  for (let i = 0; i < 20; i++) { const a = i * TAU / 20 + rnd(-.1, .1), l = r * rnd(.22, .55);
+    limbC([[x + Math.cos(a) * r * .9, y + Math.sin(a) * r * .9], [x + Math.cos(a + .12) * (r + l * .6), y + Math.sin(a + .12) * (r + l * .6)], [x + Math.cos(a + .2) * (r + l), y + Math.sin(a + .2) * (r + l)]], r * .14, 2, '#0d1226', '#2f6a78', P.cyan); }
+  blobC(x, y, r, r, 0, '#0b1020', '#2a5668', P.cyan, 1.4, .03);
+  for (let i = 0; i < 10; i++) { const a = rnd(TAU); ribbon([[x + Math.cos(a) * r * .8, y + Math.sin(a) * r * .8], [x + rnd(-.4, .4) * r, y + rnd(-.4, .4) * r], [x + Math.cos(a + Math.PI + rnd(-.6, .6)) * r * .8, y + Math.sin(a + Math.PI + rnd(-.6, .6)) * r * .8]], 5, 3, '#05070f', 200); }   // dark veins
+  for (let k = 0; k < 7; k++) { const a = rnd(TAU), d = r * rnd(.1, .7); win(x + Math.cos(a) * d, y + Math.sin(a) * d, r * rnd(.18, .34), r * rnd(.12, .24), rnd(TAU)); }
+  push(); noStroke(); fill(col(P.white, 230)); for (let k = 0; k < 6; k++) ellipse(x + rnd(-.6, .6) * r, y + rnd(-.6, .6) * r, rnd(4, 9), rnd(4, 9)); pop();   // tiny bubbles
+  glow(x - r * .3, y - r * .35, r * .9, P.cyan, .2);
+}
+function anomalySky() {
+  anomalyOrb(230, 620, 190);
+  for (let i = 0; i < 12; i++) bubble(rnd(40, 860), rnd(80, 1500), rnd(24, 70));
+  membrane([[-40,300],[120,230],[300,260],[420,160],[520,40]], 90, 20, .2); membrane([[-30,1000],[120,900],[260,960],[380,880]], 70, 16, .8);
+  membrane([[900,900],[760,980],[640,1180],[600,1350]], 90, 24, 1.6); membrane([[300,1250],[200,1120],[60,1150],[-40,1050]], 80, 18, 2.4);
+}
+
+/* ---------- VIKTOR: abstract, flowing, off-centre (right side) ---------- */
+function viktor() {
+  glow(690, 430, 320, P.pinkL, .35); glow(690, 430, 200, P.cyan, .2);
+  const SK = ['#4a3040', '#e7bea4'], CL = ['#241d66', '#9a86e0'], PT = ['#171344', '#4a4aa8'], GD = ['#5a3d12', '#f3d27a'];   // earthen skin, indigo cloth, indigo trousers, gold
+  // staff with gold thorns
+  limbC([[600,110],[570,700],[510,1100],[470,1570]], 16, 26, '#3a3450', '#c7bcd8', P.cyan, P.ochre); limbC([[600,120],[585,60],[640,25],[675,75]], 14, 3, '#3a3450', '#c7bcd8');
+  [.14, .3, .5, .68, .84].forEach(t => { const x = lerp(600, 470, t), y = lerp(110, 1570, t); [-1, 1].forEach(s => limbC([[x, y + rnd(-12, 12)], [x + s * rnd(16, 28), y - rnd(18, 40)]], 10, 2, GD[0], GD[1], P.gold)); });
+  // trailing legs that dissolve into anomaly
+  limbC([[620,1010],[560,1170],[470,1290],[380,1380]], 130, 62, PT[0], PT[1], P.cyan, P.ochre); limbC([[660,1030],[720,1190],[660,1340],[560,1470]], 118, 52, PT[0], PT[1], P.cyan, P.ochre);
+  blobC(545, 1195, 46, 58, .5, GD[0], GD[1], P.gold, 1, .14, P.ochre); blobC(718, 1215, 40, 52, -.3, GD[0], GD[1], P.gold, 1, .14, P.ochre);
+  membrane([[380,1380],[260,1470],[120,1530],[-40,1580]], 80, 24, .3); membrane([[560,1470],[500,1560],[400,1620]], 70, 20, .9);
+  limbC([[780,800],[660,920],[520,1020],[330,1110]], 130, 70, CL[0], CL[1], P.pinkL, P.ochre);                         // sash
+  // torso, chest marks, shoulder cloth
+  limbC([[690,530],[705,700],[668,880],[628,1050]], 210, 150, SK[0], SK[1], P.cyan, P.ochre, 1.3);
+  for (let i = 0; i < 5; i++) ribbon([[640,640 + i * 34], [700,660 + i * 34], [750,640 + i * 34]], 3, 3, '#6a4a50', 90);   // ribs
+  hexBolt(690, 590, 690, 690, 1.3, 2); hexBolt(690, 610, 640, 660, 1.1, 2); hexBolt(690, 610, 740, 660, 1.1, 2); glow(690, 625, 80, P.cyan, .6);   // glowing anomaly veins at the sternum
+  limbC([[560,560],[670,600],[790,760],[748,910]], 160, 80, CL[0], CL[1], P.pinkL, P.ochre); limbC([[600,575],[700,640],[770,790]], 26, 10, P.pink, P.pinkL, P.pinkL);
+  limbC([[690,495],[690,560]], 54, 66, SK[0], SK[1], P.cyan, P.ochre);
+  // staff arm
+  limbC([[612,585],[545,690],[535,790]], 78, 54, SK[0], SK[1], P.cyan, P.ochre); armlet(585, 628, 44, 16, .5); blobC(530, 812, 34, 30, .2, SK[0], SK[1], P.cyan, .6, .1, P.ochre);
+  [[[522,800],[500,838]], [[535,820],[520,862]], [[548,818],[545,860]]].forEach(([a, b]) => limbC([a, b], 18, 9, SK[0], SK[1], P.cyan));
+  // reaching arm and hand, toward the viewer
+  limbC([[795,585],[805,700],[775,820]], 90, 68, SK[0], SK[1], P.cyan, P.ochre); limbC([[775,820],[690,950],[610,1030]], 68, 54, SK[0], SK[1], P.cyan, P.ochre); armlet(795, 640, 48, 16, -.4);
+  blobC(575, 1060, 62, 48, -.6, SK[0], SK[1], P.cyan, 1.1, .1, P.ochre);
+  [[[560,1075],[500,1120],[448,1170]], [[575,1095],[530,1160],[498,1225]], [[595,1105],[568,1178],[556,1250]], [[612,1090],[614,1160],[630,1222]], [[600,1030],[560,990],[515,982]]].forEach(f => limbC(f, 30, 11, SK[0], SK[1], P.cyan, P.ochre));
+  for (let i = 0; i < 40; i++) dab(575 + rnd(-60, 60), 1060 + rnd(-50, 50), rnd(TAU), rnd(6, 14), 3, random([P.pink, P.cyan, P.purple]), 100);   // anomaly shimmer on the skin
+  // surreal translucent anomaly arm raised behind the head, with a glowing palm and a halo
+  membrane([[800,545],[885,430],[870,290],[765,205]], 120, 64, 1.3);
+  blobC(700, 168, 48, 30, .35, '#a4502a', '#f3d27a', P.gold, 1, .15, P.pink);
+  [[[680,150],[650,100],[640,70]], [[700,140],[690,85],[700,50]], [[722,145],[735,95],[760,70]], [[740,160],[775,125],[805,115]], [[670,175],[630,170],[600,150]]].forEach(f => limbC(f, 20, 6, '#6e2f1a', '#f3d27a', P.gold, P.pink));
+  glow(700, 168, 140, P.gold, .7);
+  const halo = []; for (let a = 3.4; a < 6.1; a += .2) halo.push([690 + Math.cos(a) * 200, 440 + Math.sin(a) * 190]); membrane(halo, 40, 14, 2.1);
+  // hair behind the head: white-lavender strands with pink tips
+  for (let i = 0; i < 26; i++) { const sx = 640 + i * 4 + rnd(-6, 6), sy = 372 + rnd(-10, 10), p = [[sx, sy], [sx + rnd(-60, 60) - 30, sy + 140], [sx + rnd(-90, 90) - 40, sy + 260], [sx + rnd(-120, 120) - 40, sy + 380]];
+    ribbon(p, 14, 4, random(['#cfc4e8', '#e6dcf2', '#a994e6', '#f2e6f6']), 235); ribbon(p.slice(2), 5, 2, P.pink, 220); }
+  // the face, painted softly (no hard outlines)
+  blobC(690, 445, 58, 76, .12, '#4a3040', '#e7bea4', P.cyan, 1.2, .05, P.ochre);
+  blotch(668, 432, 15, 9, '#2a1a2a', 150, 6); blotch(718, 428, 15, 9, '#2a1a2a', 150, 6); blotch(652, 472, 14, 22, '#7a5a64', 80); blotch(730, 468, 14, 22, '#7a5a64', 80);
+  push(); noStroke(); fill(col('#e6a84a', 240)); ellipse(668, 433, 9, 7); ellipse(718, 429, 9, 7); fill(col('#1a0f18', 255)); ellipse(668, 433, 4, 4); ellipse(718, 429, 4, 4); pop();   // gold eyes
+  glow(668, 433, 26, P.gold, .5); glow(718, 429, 26, P.gold, .5);
+  ribbon([[648,422],[684,411]], 9, 4, '#5a4a5e', 235); ribbon([[702,409],[742,420]], 4, 9, '#5a4a5e', 235);          // sorrowful brows
+  dab(692, 440, HALF_PI, 36, 5, '#7a5a64', 90); ribbon([[670,486],[692,491],[714,487]], 4, 4, '#7a3a44', 210);      // nose shadow, downturned mouth
+  [[[640,380],[618,470],[626,560],[604,640]], [[742,378],[764,470],[752,560],[772,640]]].forEach(p => { ribbon(p, 18, 3, '#e6dcf2', 235); ribbon(p.slice(2), 6, 2, P.pink, 220); });
+  for (let i = 0; i < 10; i++) ribbon([[646 + i * 9, 374], [640 + i * 10, 420], [630 + i * 12 + rnd(-6, 6), 478]], 9, 3, random(['#f2e6f6', '#cfc4e8', '#a994e6']), 225);   // fringe
+}
+
+/* ---------- THE STORM HE CASTS ---------- */
+function stormStreams() {                                    // anomaly pouring from the reaching hand toward the viewer
+  const sp = []; for (let a = 0; a < 8; a += .4) sp.push([580 + Math.cos(a) * (36 + a * 18), 1190 + Math.sin(a) * (36 + a * 13)]);
+  ribbon(sp, 8, 22, P.ice, 190); ribbon(sp.map(p => [p[0] + 8, p[1]]), 4, 12, P.pink, 170);
+  [[[560,1230],[470,1380],[330,1520],[200,1620]], [[600,1230],[720,1380],[820,1520],[900,1600]]].forEach(s => { ribbon(s, 34, 66, P.cyan, 150); ribbon(s, 10, 22, P.white, 150); });
+  glow(580, 1190, 240, P.cyan, .7); glow(580, 1190, 80, P.white, .6);
+}
+function bolts() {                                           // hex-angle lightning (electric blue-white, pink fringe)
+  [[700,170,520,120], [700,170,860,60], [580,1190,300,1350], [580,1190,760,1480], [230,620,420,560]].forEach(b => hexBolt(...b, 3.2));
+  for (let i = 0; i < 9; i++) { const a = rnd(TAU), r = rnd(300, 700); hexBolt(VP[0] + cos(a) * r, VP[1] + sin(a) * r, VP[0] + cos(a + .45) * (r + 170), VP[1] + sin(a + .45) * (r + 170), 3); }
+  anomaly(580, 1190, 140); anomaly(700, 170, 110);
+}
+
+/* ---------- 7. FOREGROUND, SPARKS, FINISH ---------- */
+function foreground() {                                      // huge dark rubble cropped by the frame = we are close to the ground
+  [[40,1500,260],[860,1480,300],[-20,1180,180],[930,1000,170],[130,1630,200]].forEach(([x, y, s]) => stone(x, y, s, { d: .02, th: rnd(TAU), rot: rnd(TAU) }));
+}
+function sparks() {                                          // embers and shimmer flowing with the swirl
+  push(); blendMode(ADD);
+  for (let i = 0; i < 900; i++) {
+    const x = rnd(W), y = rnd(H), a = Math.atan2(y - VP[1], x - VP[0]) + HALF_PI + rnd(-.4, .4), l = rnd(6, 26);
+    stroke(col(random([P.gold, P.ice, P.cyan, P.magenta, P.white]), rnd(120, 255))); strokeWeight(rnd(1, 3)); line(x, y, x + cos(a) * l, y + sin(a) * l);
+  }
+  pop();
+}
+function vignette() {                                        // painted darkness at the frame edges (strokes, not an overlay)
+  for (let i = 0; i < 2200; i++) { const x = rnd(W), y = rnd(H), e = Math.max(abs(x - 450) / 450, abs(y - 800) / 800); if (random() < pow(e, 3)) dab(x, y, rnd(TAU), rnd(30, 80), rnd(8, 20), P.deep, 120); }
+}
+// bake(): the oil finish. 1 luminance = paint height  2 canvas weave + craquelure  3 soften colour edges
+// 4 light the slopes from the upper left  5 varnish glint  6 amber glaze
+function bake() {
+  loadPixels(); const n = W * H, Ht = new Float32Array(n);
+  for (let i = 0; i < n; i++) Ht[i] = .3 * pixels[4*i] + .59 * pixels[4*i+1] + .11 * pixels[4*i+2];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) Ht[y*W + x] += 6 * Math.sin(x * 1.57) * Math.sin(y * 1.57);
+  for (let k = 0; k < 90; k++) { let x = rnd(W), y = rnd(H), a = rnd(TAU); for (let s = 0; s < 80; s++) { a += rnd(-.5, .5); x += cos(a); y += sin(a); const o = floor(y) * W + floor(x); if (o > 0 && o < n) Ht[o] -= 22; } }
+  filter(BLUR, 1); loadPixels();
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x, sh = ((Ht[i+1] - Ht[i-1]) * .25 + (Ht[i+W] - Ht[i-W]) * .3) * .011, f = 1 + constrain(sh, -.4, .4), sp = max(0, sh - .22) * 180;
+    pixels[4*i] = constrain(pixels[4*i] * f * 1.03 + sp, 0, 255); pixels[4*i+1] = constrain(pixels[4*i+1] * f * .99 + sp * .95, 0, 255); pixels[4*i+2] = constrain(pixels[4*i+2] * f * .95 + sp * .9, 0, 255);
+  }
+  updatePixels();
+}
+</script>
+</body>
+</html>
